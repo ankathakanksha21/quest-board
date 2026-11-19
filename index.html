@@ -873,17 +873,28 @@ const objectFor = k => { let h = 0; for (const ch of k) h = (h * 31 + ch.charCod
 const LEVEL_TITLES = [[1, 'Fresh commit'], [3, 'First PR'], [5, 'Merged'], [8, 'Shipping weekly'], [12, 'Room regular'], [16, 'Known builder'], [20, 'On the stage'], [25, 'Founder mode']];
 
 const DEFAULTS = {
-  v: 1, startDate: null,
+  v: 2, startDate: '2026-11-20',
+  kickoff: '2026-11-20', weeklyFrom: '2026-11-23', reelsFrom: '2026-11-23',
   dayStart: 660, dayEnd: 1620,                 // 11:00 -> 03:00
   campusDays: [2, 4], campusStart: 660, campusEnd: 1140,  // Tue & Thu 11:00-19:00
   meherMeetDay: 6, meherMeetStart: 660, meherMeetEnd: 780, // Sat 11:00-13:00
   meherWorkDays: [3, 6], reelDays: [1, 3, 5],
   choreStart: 720, choreLen: 270, eventStart: 1080, eventLen: 330,
   streakAt: 70, targets: {}, plan: {}, hacks: [], talks: [],
-  researchMonth: '2026-12', cycleAnchor: '2026-11-16', talkFrom: '2027-05', talkTo: '2027-09',
+  researchMonth: '2026-12', cycleAnchor: '2026-11-09', talkFrom: '2027-05', talkTo: '2027-09',
   ui: { version: 2, theme: 'light' } // look only: which version and colour mode
 };
-const withDefaults = s => Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), s || {});
+function withDefaults(s) {
+  const out = JSON.parse(JSON.stringify(DEFAULTS));
+  s = s || {};
+  for (const k in s) if (s[k] != null) out[k] = s[k];
+  if ((s.v || 1) < 2) { // kick-off update: fresh start on Fri 20 Nov, fortnights Mon 23 Nov onwards
+    out.v = 2; out.cycleAnchor = DEFAULTS.cycleAnchor;
+    if (!s.startDate || s.startDate < DEFAULTS.startDate) out.startDate = DEFAULTS.startDate;
+    for (const k of ['kickoff', 'weeklyFrom', 'reelsFrom']) out[k] = DEFAULTS[k];
+  }
+  return out;
+}
 
 /* ---------------- Targets & reading the log ---------------- */
 const tgt = (S, id) => (S.targets && S.targets[id] != null) ? S.targets[id] : ITEMS[id].target;
@@ -916,13 +927,25 @@ function cycleRange(S, k) {
   return [s, addDays(s, 13)];
 }
 function defaultPlanDate(S, id, period) {
-  if (id === 'targets') {
-    const sat1 = addDays(period, 5);
-    return sat1 === lastDowOfMonth(sat1.slice(0, 7), 6) ? addDays(period, 12) : sat1; // dodge the content-plan Saturday
+  if (id === 'targets') { // made on the last Saturday of a fortnight, ready for the next one
+    const sat = addDays(period, 12);
+    return sat === defaultPlanDate(S, 'content', sat.slice(0, 7)) ? addDays(period, 13) : sat; // content-plan Saturday: use the Sunday
   }
-  if (id === 'content' || id === 'calendar') return lastDowOfMonth(period, 6);
+  if (id === 'content' || id === 'calendar') {
+    if (S.kickoff && period === S.kickoff.slice(0, 7)) return S.kickoff; // first one: kick-off day
+    return lastDowOfMonth(period, 6);
+  }
   if (id === 'claude') return lastDowOfMonth(period, 0);
   return null; // event: you pick the date
+}
+function prepFor(S, id, period) {
+  if (id === 'targets') { const n = addDays(period, 14); return `for ${fmtDay(n)} – ${fmtDay(addDays(n, 13))}`; }
+  if (id === 'content' || id === 'calendar') {
+    const [y, m] = period.split('-').map(Number), next = MONTHS[m % 12];
+    if (S.kickoff && period === S.kickoff.slice(0, 7)) return `for the rest of ${MONTHS[m - 1]} and all of ${next}`;
+    return `for ${next}`;
+  }
+  return '';
 }
 const periodOf = (S, id, k) => id === 'targets' ? cycleRange(S, k)[0] : k.slice(0, 7);
 const periodRange = (S, id, k) => id === 'targets' ? cycleRange(S, k) : monthRange(k);
@@ -995,7 +1018,7 @@ function planDay(st, k) {
     F.push({ o: 1, id: 'gh', len: 130, pref: W0 + 30, tag: 'github', title: 'GitHub', sub: '3 Pomodoros: 40 min focus, 5 min break, phone on DND' });
     if (isResearchDay(S, k)) F.push({ o: 2, id: 'research', len: 60, pref: W0 + 30, until: 21 * 60, tag: 'research', title: 'Dissertation research', sub: 'Ideas, reading, or a chat with a mentor or prof' });
     if (S.meherWorkDays.includes(dw)) F.push({ o: meetDay ? 0 : 4.5, id: 'meher', len: 130, pref: meetDay ? S.meherMeetEnd + 15 : 19 * 60, tag: 'github', title: 'Meher startup work', sub: '3 Pomodoros' });
-    if (S.reelDays.includes(dw)) {
+    if (S.reelDays.includes(dw) && (!S.reelsFrom || k >= S.reelsFrom)) {
       F.push({ o: 3, id: 'reel', len: 210, pref: 17 * 60, tag: 'content', title: 'Reel session', sub: 'Research, script, shoot, edit, post' });
       F.push({ o: 3.5, id: 'liPost', len: 20, after: 'reel', tag: 'job', title: 'LinkedIn post', sub: 'Repurpose today\'s reel or GitHub notes' });
     }
@@ -1045,6 +1068,7 @@ function dayScore(st, k) {
 }
 function weekCleared(st, ws) {
   const S = st.settings, we = addDays(ws, 6);
+  if (S.weeklyFrom && we < S.weeklyFrom) return false;
   return WEEKLY_IDS.every(id => weekVal(st, id, ws, we) >= tgt(S, id));
 }
 function totalXP(st, exclude) {
@@ -1073,7 +1097,7 @@ function totalXP(st, exclude) {
       xp += Math.min(v, cap(S, id)) * ITEMS[id].xp;
       if (v < tgt(S, id)) all = false;
     }
-    if (all) xp += 100;
+    if (all && !(S.weeklyFrom && addDays(ws, 6) < S.weeklyFrom)) xp += 100;
   }
   for (const mk in months) {
     const m = months[mk];
@@ -1114,6 +1138,7 @@ function streakInfo(st, today) {
 function weekPace(st, id, k, today) {
   const S = st.settings, ws = weekStart(k), we = addDays(ws, 6), t = tgt(S, id);
   const v = weekVal(st, id, ws, we);
+  if (S.weeklyFrom && we < S.weeklyFrom) return { v, t, expected: 0, status: 'muted', label: `From ${fmtDay(S.weeklyFrom)}`, daysLeft: 0, todayShare: 0 };
   const from = [ws, startOf(st, today)].sort()[1];
   const avail = Math.max(1, diffDays(from, we) + 1);
   const elapsed = today < from ? 0 : Math.min(avail, diffDays(from, today > we ? we : today) + 1);
@@ -1145,6 +1170,7 @@ function itemPct(st, id, a, b) {
   if (it.freq === 'weekly') {
     let need = 0, have = 0;
     for (let ws = weekStart(a); ws <= b; ws = addDays(ws, 7)) {
+      if (S.weeklyFrom && addDays(ws, 6) < S.weeklyFrom) continue;
       const p = weekPace(st, id, ws, today);
       if (p.v >= t) { need += t; have += t; continue; }
       const exp = ws === weekStart(today) ? Math.floor(p.expected + 1e-9) : t;
@@ -1194,7 +1220,7 @@ const LOGIC = {
   pad, dkey, parseK, addDays, dow, diffDays, weekStart, weekEnd, monthRange, lastDowOfMonth, nthSunday, fmtT, fmtDur, parseT, fmtDay,
   DOW_SHORT, DOW_LONG, MONTHS, logicalNow, TAGS, TAG_ORDER, ITEMS, DAILY_IDS, LIGHT_IDS, WEEKLY_IDS, MONTHLY_IDS, GH_ACTS, FREE_CHIPS,
   objectFor, DEFAULTS, withDefaults, tgt, cap, getDay, getC, startOf, sumRange, shiftH, shiftRange, weekVal, lastDone, cycleRange,
-  defaultPlanDate, periodOf, periodRange, planEntry, doneInPeriod, plannedQuests, plannedEvent, hackOn, isLight, isResearchDay,
+  defaultPlanDate, prepFor, periodOf, periodRange, planEntry, doneInPeriod, plannedQuests, plannedEvent, hackOn, isLight, isResearchDay,
   nextHackDue, choreName, findSlot, planDay, dayScore, weekCleared, totalXP, levelOf, streakInfo, weekPace, windowRange, itemPct,
   tagPct, dayTagPct, itemStreak
 };
@@ -1207,7 +1233,7 @@ if (typeof module !== 'undefined') module.exports = LOGIC;
   const {
     addDays, dow, diffDays, weekStart, monthRange, nthSunday, fmtT, fmtDur, parseT, fmtDay, DOW_SHORT, DOW_LONG, MONTHS, parseK,
     logicalNow, TAGS, TAG_ORDER, ITEMS, DAILY_IDS, LIGHT_IDS, WEEKLY_IDS, GH_ACTS, FREE_CHIPS, objectFor, withDefaults, tgt, cap,
-    getDay, getC, startOf, sumRange, shiftH, weekVal, lastDone, cycleRange, periodOf, periodRange, planEntry, doneInPeriod,
+    getDay, getC, startOf, sumRange, shiftH, weekVal, lastDone, cycleRange, prepFor, periodOf, periodRange, planEntry, doneInPeriod,
     plannedEvent, hackOn, isLight, isResearchDay, nextHackDue, choreName, planDay, dayScore, totalXP, levelOf, streakInfo,
     weekPace, windowRange, itemPct, tagPct, dayTagPct, itemStreak, weekCleared
   } = LOGIC;
@@ -1427,7 +1453,7 @@ if (typeof module !== 'undefined') module.exports = LOGIC;
     </div>`;
   }
   function pill(status, text) { return `<span class="pill pill-${status}">${esc(text)}</span>`; }
-  const paceText = p => p.status === 'done' ? 'Done' : p.status === 'missed' ? 'Missed' : p.status === 'behind' ? 'Behind' : 'On track';
+  const paceText = p => p.label ? p.label : p.status === 'done' ? 'Done' : p.status === 'missed' ? 'Missed' : p.status === 'behind' ? 'Behind' : 'On track';
   const relDay = (k, today) => { if (!k) return 'Not yet'; const d = diffDays(k, today); return d === 0 ? 'Today' : d === 1 ? 'Yesterday' : d > 1 ? `${d} days ago` : fmtDay(k); };
 
   /* ---------- HUD ---------- */
@@ -1615,14 +1641,15 @@ if (typeof module !== 'undefined') module.exports = LOGIC;
     else sunRows.push(row({ title: `Fifth Sunday (${fmtDay(sun)}): no chore`, n: ITEMS.chores.n, tag: 'live', hint: 'Free hours this Sunday.', ctrl: '' }));
     sunRows.push(row({ title: `${ITEMS.ebike.label} (${fmtDay(sun)})`, n: ITEMS.ebike.n, tag: 'live', hint: ITEMS.ebike.hint, ctrl: checkBtn('ebike', getC(ST, sun, 'ebike') >= 1, 'set1', { day: sun, disabled: sun > t }), done: getC(ST, sun, 'ebike') >= 1 }));
 
-    h += `<section class="card"><div class="card-head"><h2>This week</h2><span class="muted">${fmtDay(ws)} – ${fmtDay(we)}</span>${pill(cleared === WEEKLY_IDS.length ? 'done' : 'track', `Week clear ${cleared}/${WEEKLY_IDS.length} · +100 XP`)}</div>
+    h += `<section class="card"><div class="card-head"><h2>This week</h2><span class="muted">${fmtDay(ws)} – ${fmtDay(we)}</span>${we < (s.weeklyFrom || '') ? pill('muted', `Weekly targets start ${fmtDay(s.weeklyFrom)}`) : pill(cleared === WEEKLY_IDS.length ? 'done' : 'track', `Week clear ${cleared}/${WEEKLY_IDS.length} · +100 XP`)}</div>
       ${strip}${WEEKLY_IDS.map(wRow).join('')}<h3>Sunday</h3>${sunRows.join('')}</section>`;
 
     // periodic
     const pRow = (id, extraHint) => {
       const it = ITEMS[id], per = periodOf(s, id, k), [a, b] = periodRange(s, id, k), done = sumRange(ST, id, a, b) > 0;
       const pe = planEntry(s, id, per);
-      const when = pe ? `Planned ${fmtDay(pe.date)}${pe.auto ? '' : ' (your pick)'}` : 'Not planned yet';
+      const pf = prepFor(s, id, per);
+      const when = pe ? `Planned ${fmtDay(pe.date)}${pe.auto ? '' : ' (your pick)'}${pf ? ' · ' + pf : ''}` : 'Not planned yet';
       const dLog = logDay >= a && logDay <= b ? logDay : (t >= a && t <= b ? t : null);
       const ctrl = checkBtn(id, done, 'pcheck', { disabled: !done && !dLog }) + `<button type="button" class="btn ghost sm" data-act="plan-date" data-id="${id}" data-per="${per}">${pe ? 'Move' : 'Pick date'}</button>`;
       return row({ title: it.label, n: it.n, tag: it.tag, hint: `${it.hint}<br><span class="when">${when}</span>${extraHint || ''}`, ctrl, done });
@@ -2094,7 +2121,7 @@ if (typeof module !== 'undefined') module.exports = LOGIC;
     }
     strip += '</div>';
     let h = `<section class="hero hero-sm">${SQUIGGLE}<div class="hero-main"><div class="eyebrow">This week</div><h1>${fmtDay(ws)} – ${fmtDay(we)}</h1>
-      <p class="lede">Week clear <b>${cleared}/${WEEKLY_IDS.length}</b>: hit all seven for <b>+100 XP</b>. Taps on this page log to <b>${fmtDay(logDay)}</b>; tap a day to change it.</p></div>
+      <p class="lede">${we < (s.weeklyFrom || '') ? `Weekly targets start <b>${fmtDay(s.weeklyFrom)}</b>; this week is for prep.` : `Week clear <b>${cleared}/${WEEKLY_IDS.length}</b>: hit all seven for <b>+100 XP</b>.`} Taps on this page log to <b>${fmtDay(logDay)}</b>; tap a day to change it.</p></div>
       <div class="hero-side">${strip}</div></section>`;
 
     const weekly = WEEKLY_IDS.map(id => {
@@ -2118,7 +2145,8 @@ if (typeof module !== 'undefined') module.exports = LOGIC;
 
     const pCard = (id, cat, extraHint) => {
       const it = ITEMS[id], per = periodOf(s, id, k), [a, b] = periodRange(s, id, k), done = sumRange(ST, id, a, b) > 0, pe = planEntry(s, id, per);
-      const when = pe ? `Planned ${fmtDay(pe.date)}${pe.auto ? '' : ' (your pick)'}` : 'Not planned yet';
+      const pf = prepFor(s, id, per);
+      const when = pe ? `Planned ${fmtDay(pe.date)}${pe.auto ? '' : ' (your pick)'}${pf ? ' · ' + pf : ''}` : 'Not planned yet';
       const dLog = logDay >= a && logDay <= b ? logDay : (t >= a && t <= b ? t : null);
       const ctrl = checkBtn(id, done, 'pcheck', { disabled: !done && !dLog }) + `<button type="button" class="btn sm" data-act="plan-date" data-id="${id}" data-per="${per}">${pe ? 'Move' : 'Pick date'}</button>`;
       return qcard({ id, cat, tag: it.tag, n: it.n, title: it.label, hint: `${it.hint}<br><span class="when">${when}</span>${extraHint || ''}`, ctrl, done });
